@@ -50,13 +50,13 @@
 /* Read a register in a CM instance */
 static inline u32 am33xx_cm_read_reg(u16 inst, u16 idx)
 {
-	return readl_relaxed(cm_base + inst + idx);
+	return readl_relaxed(cm_base.va + inst + idx);
 }
 
 /* Write into a register in a CM */
 static inline void am33xx_cm_write_reg(u32 val, u16 inst, u16 idx)
 {
-	writel_relaxed(val, cm_base + inst + idx);
+	writel_relaxed(val, cm_base.va + inst + idx);
 }
 
 /* Read-modify-write a register in CM */
@@ -243,9 +243,6 @@ static int am33xx_cm_wait_module_idle(u8 part, s16 inst, u16 clkctrl_offs,
 {
 	int i = 0;
 
-	if (!clkctrl_offs)
-		return 0;
-
 	omap_test_timeout((_clkctrl_idlest(inst, clkctrl_offs) ==
 				CLKCTRL_IDLEST_DISABLED),
 				MAX_MODULE_READY_TIME, i);
@@ -352,7 +349,7 @@ static struct cm_ll_data am33xx_cm_ll_data = {
 	.module_disable		= &am33xx_cm_module_disable,
 };
 
-int __init am33xx_cm_init(void)
+int __init am33xx_cm_init(const struct omap_prcm_init_data *data)
 {
 	return cm_register(&am33xx_cm_ll_data);
 }

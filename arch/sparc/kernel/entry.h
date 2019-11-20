@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _ENTRY_H
 #define _ENTRY_H
 
@@ -68,6 +69,8 @@ extern struct pause_patch_entry __pause_3insn_patch,
 void sun4v_patch_1insn_range(struct sun4v_1insn_patch_entry *,
 			     struct sun4v_1insn_patch_entry *);
 void sun4v_patch_2insn_range(struct sun4v_2insn_patch_entry *,
+			     struct sun4v_2insn_patch_entry *);
+void sun_m7_patch_2insn_range(struct sun4v_2insn_patch_entry *,
 			     struct sun4v_2insn_patch_entry *);
 extern unsigned int dcache_parity_tl1_occurred;
 extern unsigned int icache_parity_tl1_occurred;

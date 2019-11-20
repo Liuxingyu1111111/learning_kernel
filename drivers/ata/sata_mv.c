@@ -306,6 +306,11 @@ enum {
 	MV5_PHY_CTL		= 0x0C,
 	SATA_IFCFG		= 0x050,
 	LP_PHY_CTL		= 0x058,
+	LP_PHY_CTL_PIN_PU_PLL   = (1 << 0),
+	LP_PHY_CTL_PIN_PU_RX    = (1 << 1),
+	LP_PHY_CTL_PIN_PU_TX    = (1 << 2),
+	LP_PHY_CTL_GEN_TX_3G    = (1 << 5),
+	LP_PHY_CTL_GEN_RX_3G    = (1 << 9),
 
 	MV_M2_PREAMP_MASK	= 0x7e0,
 
@@ -981,7 +986,7 @@ static inline void mv_write_cached_reg(void __iomem *addr, u32 *old, u32 new)
 		 * Looks like a lot of fuss, but it avoids an unnecessary
 		 * +1 usec read-after-write delay for unaffected registers.
 		 */
-		laddr = (long)addr & 0xffff;
+		laddr = (unsigned long)addr & 0xffff;
 		if (laddr >= 0x300 && laddr <= 0x33c) {
 			laddr &= 0x000f;
 			if (laddr == 0x4 || laddr == 0xc) {
@@ -1391,10 +1396,17 @@ static int mv_scr_write(struct ata_link *link, unsigned int sc_reg_in, u32 val)
 				/*
 				 * Set PHY speed according to SControl speed.
 				 */
-				if ((val & 0xf0) == 0x10)
-					writelfl(0x7, lp_phy_addr);
-				else
-					writelfl(0x227, lp_phy_addr);
+				u32 lp_phy_val =
+					LP_PHY_CTL_PIN_PU_PLL |
+					LP_PHY_CTL_PIN_PU_RX  |
+					LP_PHY_CTL_PIN_PU_TX;
+
+				if ((val & 0xf0) != 0x10)
+					lp_phy_val |=
+						LP_PHY_CTL_GEN_TX_3G |
+						LP_PHY_CTL_GEN_RX_3G;
+
+				writelfl(lp_phy_val, lp_phy_addr);
 			}
 		}
 		writelfl(val, addr);
@@ -1715,15 +1727,13 @@ static int mv_port_start(struct ata_port *ap)
 		return -ENOMEM;
 	ap->private_data = pp;
 
-	pp->crqb = dma_pool_alloc(hpriv->crqb_pool, GFP_KERNEL, &pp->crqb_dma);
+	pp->crqb = dma_pool_zalloc(hpriv->crqb_pool, GFP_KERNEL, &pp->crqb_dma);
 	if (!pp->crqb)
 		return -ENOMEM;
-	memset(pp->crqb, 0, MV_CRQB_Q_SZ);
 
-	pp->crpb = dma_pool_alloc(hpriv->crpb_pool, GFP_KERNEL, &pp->crpb_dma);
+	pp->crpb = dma_pool_zalloc(hpriv->crpb_pool, GFP_KERNEL, &pp->crpb_dma);
 	if (!pp->crpb)
 		goto out_port_free_dma_mem;
-	memset(pp->crpb, 0, MV_CRPB_Q_SZ);
 
 	/* 6041/6081 Rev. "C0" (and newer) are okay with async notify */
 	if (hpriv->hp_flags & MV_HP_ERRATA_60X1C0)
@@ -2377,7 +2387,7 @@ static unsigned int mv_qc_issue(struct ata_queued_cmd *qc)
 				      ": attempting PIO w/multiple DRQ: "
 				      "this may fail due to h/w errata\n");
 		}
-		/* drop through */
+		/* fall through */
 	case ATA_PROT_NODATA:
 	case ATAPI_PROT_PIO:
 	case ATAPI_PROT_NODATA:
@@ -2468,20 +2478,18 @@ static unsigned int mv_get_err_pmp_map(struct ata_port *ap)
 
 static void mv_pmp_eh_prep(struct ata_port *ap, unsigned int pmp_map)
 {
-	struct ata_eh_info *ehi;
 	unsigned int pmp;
 
 	/*
 	 * Initialize EH info for PMPs which saw device errors
 	 */
-	ehi = &ap->link.eh_info;
 	for (pmp = 0; pmp_map != 0; pmp++) {
 		unsigned int this_pmp = (1 << pmp);
 		if (pmp_map & this_pmp) {
 			struct ata_link *link = &ap->pmp_link[pmp];
+			struct ata_eh_info *ehi = &link->eh_info;
 
 			pmp_map &= ~this_pmp;
-			ehi = &link->eh_info;
 			ata_ehi_clear_desc(ehi);
 			ata_ehi_push_desc(ehi, "dev err");
 			ehi->err_mask |= AC_ERR_DEV;
@@ -3867,7 +3875,7 @@ static int mv_chip_id(struct ata_host *host, unsigned int board_idx)
 				" and avoid the final two gigabytes on"
 				" all RocketRAID BIOS initialized drives.\n");
 		}
-		/* drop through */
+		/* fall through */
 	case chip_6042:
 		hpriv->ops = &mv6xxx_ops;
 		hp_flags |= MV_HP_GEN_IIE;
@@ -4080,7 +4088,20 @@ static int mv_platform_probe(struct platform_device *pdev)
 
 	/* allocate host */
 	if (pdev->dev.of_node) {
-		of_property_read_u32(pdev->dev.of_node, "nr-ports", &n_ports);
+		rc = of_property_read_u32(pdev->dev.of_node, "nr-ports",
+					   &n_ports);
+		if (rc) {
+			dev_err(&pdev->dev,
+				"error parsing nr-ports property: %d\n", rc);
+			return rc;
+		}
+
+		if (n_ports <= 0) {
+			dev_err(&pdev->dev, "nr-ports must be positive: %d\n",
+				n_ports);
+			return -EINVAL;
+		}
+
 		irq = irq_of_parse_and_map(pdev->dev.of_node, 0);
 	} else {
 		mv_platform_data = dev_get_platdata(&pdev->dev);
@@ -4109,6 +4130,9 @@ static int mv_platform_probe(struct platform_device *pdev)
 	host->iomap = NULL;
 	hpriv->base = devm_ioremap(&pdev->dev, res->start,
 				   resource_size(res));
+	if (!hpriv->base)
+		return -ENOMEM;
+
 	hpriv->base -= SATAHC0_REG_BASE;
 
 	hpriv->clk = clk_get(&pdev->dev, NULL);
@@ -4263,7 +4287,7 @@ static int mv_platform_resume(struct platform_device *pdev)
 #endif
 
 #ifdef CONFIG_OF
-static struct of_device_id mv_sata_dt_ids[] = {
+static const struct of_device_id mv_sata_dt_ids[] = {
 	{ .compatible = "marvell,armada-370-sata", },
 	{ .compatible = "marvell,orion-sata", },
 	{},
@@ -4308,10 +4332,10 @@ static int pci_go_64(struct pci_dev *pdev)
 {
 	int rc;
 
-	if (!pci_set_dma_mask(pdev, DMA_BIT_MASK(64))) {
-		rc = pci_set_consistent_dma_mask(pdev, DMA_BIT_MASK(64));
+	if (!dma_set_mask(&pdev->dev, DMA_BIT_MASK(64))) {
+		rc = dma_set_coherent_mask(&pdev->dev, DMA_BIT_MASK(64));
 		if (rc) {
-			rc = pci_set_consistent_dma_mask(pdev, DMA_BIT_MASK(32));
+			rc = dma_set_coherent_mask(&pdev->dev, DMA_BIT_MASK(32));
 			if (rc) {
 				dev_err(&pdev->dev,
 					"64-bit DMA enable failed\n");
@@ -4319,12 +4343,12 @@ static int pci_go_64(struct pci_dev *pdev)
 			}
 		}
 	} else {
-		rc = pci_set_dma_mask(pdev, DMA_BIT_MASK(32));
+		rc = dma_set_mask(&pdev->dev, DMA_BIT_MASK(32));
 		if (rc) {
 			dev_err(&pdev->dev, "32-bit DMA enable failed\n");
 			return rc;
 		}
-		rc = pci_set_consistent_dma_mask(pdev, DMA_BIT_MASK(32));
+		rc = dma_set_coherent_mask(&pdev->dev, DMA_BIT_MASK(32));
 		if (rc) {
 			dev_err(&pdev->dev,
 				"32-bit consistent DMA enable failed\n");
@@ -4503,7 +4527,7 @@ static void __exit mv_exit(void)
 
 MODULE_AUTHOR("Brett Russ");
 MODULE_DESCRIPTION("SCSI low-level driver for Marvell SATA controllers");
-MODULE_LICENSE("GPL");
+MODULE_LICENSE("GPL v2");
 MODULE_DEVICE_TABLE(pci, mv_pci_tbl);
 MODULE_VERSION(DRV_VERSION);
 MODULE_ALIAS("platform:" DRV_NAME);

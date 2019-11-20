@@ -31,7 +31,7 @@
 static struct hlist_head	nlm_files[FILE_NRHASH];
 static DEFINE_MUTEX(nlm_file_mutex);
 
-#ifdef NFSD_DEBUG
+#ifdef CONFIG_SUNRPC_DEBUG
 static inline void nlm_debug_print_fh(char *msg, struct nfs_fh *f)
 {
 	u32 *fhp = (u32*)f->data;
@@ -370,7 +370,7 @@ nlmsvc_mark_resources(struct net *net)
 {
 	struct nlm_host hint;
 
-	dprintk("lockd: nlmsvc_mark_resources for net %p\n", net);
+	dprintk("lockd: %s for net %x\n", __func__, net ? net->ns.inum : 0);
 	hint.net = net;
 	nlm_traverse_files(&hint, nlmsvc_mark_host, NULL);
 }

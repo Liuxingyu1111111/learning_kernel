@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  *  linux/arch/alpha/kernel/rtc.c
  *
@@ -14,8 +15,6 @@
 #include <linux/bcd.h>
 #include <linux/rtc.h>
 #include <linux/platform_device.h>
-
-#include <asm/rtc.h>
 
 #include "proto.h"
 
@@ -81,7 +80,7 @@ init_rtc_epoch(void)
 static int
 alpha_rtc_read_time(struct device *dev, struct rtc_time *tm)
 {
-	__get_rtc_time(tm);
+	mc146818_get_time(tm);
 
 	/* Adjust for non-default epochs.  It's easier to depend on the
 	   generic __get_rtc_time and adjust the epoch here than create
@@ -112,11 +111,11 @@ alpha_rtc_set_time(struct device *dev, struct rtc_time *tm)
 		tm = &xtm;
 	}
 
-	return __set_rtc_time(tm);
+	return mc146818_set_time(tm);
 }
 
 static int
-alpha_rtc_set_mmss(struct device *dev, unsigned long nowtime)
+alpha_rtc_set_mmss(struct device *dev, time64_t nowtime)
 {
 	int retval = 0;
 	int real_seconds, real_minutes, cmos_minutes;
@@ -211,7 +210,7 @@ alpha_rtc_ioctl(struct device *dev, unsigned int cmd, unsigned long arg)
 static const struct rtc_class_ops alpha_rtc_ops = {
 	.read_time = alpha_rtc_read_time,
 	.set_time = alpha_rtc_set_time,
-	.set_mmss = alpha_rtc_set_mmss,
+	.set_mmss64 = alpha_rtc_set_mmss,
 	.ioctl = alpha_rtc_ioctl,
 };
 
@@ -276,7 +275,7 @@ do_remote_mmss(void *data)
 }
 
 static int
-remote_set_mmss(struct device *dev, unsigned long now)
+remote_set_mmss(struct device *dev, time64_t now)
 {
 	union remote_data x;
 	if (smp_processor_id() != boot_cpuid) {
@@ -290,7 +289,7 @@ remote_set_mmss(struct device *dev, unsigned long now)
 static const struct rtc_class_ops remote_rtc_ops = {
 	.read_time = remote_read_time,
 	.set_time = remote_set_time,
-	.set_mmss = remote_set_mmss,
+	.set_mmss64 = remote_set_mmss,
 	.ioctl = alpha_rtc_ioctl,
 };
 #endif

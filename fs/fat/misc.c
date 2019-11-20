@@ -6,10 +6,6 @@
  *		 and date_dos2unix for date==0 by Igor Zhbanov(bsg@uniyar.ac.ru)
  */
 
-#include <linux/module.h>
-#include <linux/fs.h>
-#include <linux/buffer_head.h>
-#include <linux/time.h>
 #include "fat.h"
 
 /*
@@ -36,8 +32,8 @@ void __fat_fs_error(struct super_block *sb, int report, const char *fmt, ...)
 
 	if (opts->errors == FAT_ERRORS_PANIC)
 		panic("FAT-fs (%s): fs panic from previous error\n", sb->s_id);
-	else if (opts->errors == FAT_ERRORS_RO && !(sb->s_flags & MS_RDONLY)) {
-		sb->s_flags |= MS_RDONLY;
+	else if (opts->errors == FAT_ERRORS_RO && !sb_rdonly(sb)) {
+		sb->s_flags |= SB_RDONLY;
 		fat_msg(sb, KERN_ERR, "Filesystem has been set read-only");
 	}
 }
@@ -271,7 +267,7 @@ int fat_sync_bhs(struct buffer_head **bhs, int nr_bhs)
 	int i, err = 0;
 
 	for (i = 0; i < nr_bhs; i++)
-		write_dirty_buffer(bhs[i], WRITE);
+		write_dirty_buffer(bhs[i], 0);
 
 	for (i = 0; i < nr_bhs; i++) {
 		wait_on_buffer(bhs[i]);

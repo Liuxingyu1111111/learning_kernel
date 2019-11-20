@@ -1,20 +1,11 @@
+# SPDX-License-Identifier: GPL-2.0
 # The loops are all 64-bit code
 CFLAGS += -m64
 CFLAGS += -I$(CURDIR)
 
-PROGS := memcmp
+TEST_GEN_PROGS := memcmp
 EXTRA_SOURCES := memcmp_64.S ../harness.c
 
-all: $(PROGS)
+include ../../lib.mk
 
-$(PROGS): $(EXTRA_SOURCES)
-
-run_tests: all
-	@-for PROG in $(PROGS); do \
-		./$$PROG; \
-	done;
-
-clean:
-	rm -f $(PROGS) *.o
-
-.PHONY: all run_tests clean
+$(TEST_GEN_PROGS): $(EXTRA_SOURCES)

@@ -19,8 +19,7 @@
 #include <linux/module.h>
 #include <linux/platform_device.h>
 
-#include "../w1.h"
-#include "../w1_int.h"
+#include <linux/w1.h>
 
 /*
  * MXC W1 Register offsets
@@ -166,7 +165,7 @@ static int mxc_w1_remove(struct platform_device *pdev)
 	return 0;
 }
 
-static struct of_device_id mxc_w1_dt_ids[] = {
+static const struct of_device_id mxc_w1_dt_ids[] = {
 	{ .compatible = "fsl,imx21-owire" },
 	{ /* sentinel */ }
 };

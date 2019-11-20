@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * USB transceiver driver for AB8500 family chips
  *
@@ -5,21 +6,6 @@
  * Mian Yousaf Kaukab <mian.yousaf.kaukab@stericsson.com>
  * Avinash Kumar <avinash.kumar@stericsson.com>
  * Thirupathi Chippakurthy <thirupathi.chippakurthy@stericsson.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
- *
  */
 
 #include <linux/module.h>
@@ -277,7 +263,7 @@ static void ab8500_usb_regulator_enable(struct ab8500_usb *ab)
 			dev_err(ab->dev, "Failed to set the Vintcore to 1.3V, ret=%d\n",
 					ret);
 
-		ret = regulator_set_optimum_mode(ab->v_ulpi, 28000);
+		ret = regulator_set_load(ab->v_ulpi, 28000);
 		if (ret < 0)
 			dev_err(ab->dev, "Failed to set optimum mode (ret=%d)\n",
 					ret);
@@ -317,7 +303,7 @@ static void ab8500_usb_regulator_disable(struct ab8500_usb *ab)
 						ab->saved_v_ulpi, ret);
 		}
 
-		ret = regulator_set_optimum_mode(ab->v_ulpi, 0);
+		ret = regulator_set_load(ab->v_ulpi, 0);
 		if (ret < 0)
 			dev_err(ab->dev, "Failed to set optimum mode (ret=%d)\n",
 					ret);
@@ -893,7 +879,7 @@ static int abx500_usb_link_status_update(struct ab8500_usb *ab)
 
 /*
  * Disconnection Sequence:
- *   1. Disconect Interrupt
+ *   1. Disconnect Interrupt
  *   2. Disable regulators
  *   3. Disable AB clock
  *   4. Disable the Phy
@@ -1023,38 +1009,6 @@ static void ab8500_usb_vbus_turn_on_event_work(struct work_struct *work)
 	ab->enabled_charging_detection = true;
 }
 
-static unsigned ab8500_eyediagram_workaroud(struct ab8500_usb *ab, unsigned mA)
-{
-	/*
-	 * AB8500 V2 has eye diagram issues when drawing more than 100mA from
-	 * VBUS.  Set charging current to 100mA in case of standard host
-	 */
-	if (is_ab8500_2p0_or_earlier(ab->ab8500))
-		if (mA > 100)
-			mA = 100;
-
-	return mA;
-}
-
-static int ab8500_usb_set_power(struct usb_phy *phy, unsigned mA)
-{
-	struct ab8500_usb *ab;
-
-	if (!phy)
-		return -ENODEV;
-
-	ab = phy_to_ab(phy);
-
-	mA = ab8500_eyediagram_workaroud(ab, mA);
-
-	ab->vbus_draw = mA;
-
-	atomic_notifier_call_chain(&ab->phy.notifier,
-			UX500_MUSB_VBUS, &ab->vbus_draw);
-
-	return 0;
-}
-
 static int ab8500_usb_set_suspend(struct usb_phy *x, int suspend)
 {
 	/* TODO */
@@ -1179,7 +1133,7 @@ static int ab8500_usb_irq_setup(struct platform_device *pdev,
 		}
 		err = devm_request_threaded_irq(&pdev->dev, irq, NULL,
 				ab8500_usb_link_status_irq,
-				IRQF_NO_SUSPEND | IRQF_SHARED,
+				IRQF_NO_SUSPEND | IRQF_SHARED | IRQF_ONESHOT,
 				"usb-link-status", ab);
 		if (err < 0) {
 			dev_err(ab->dev, "request_irq failed for link status irq\n");
@@ -1195,7 +1149,7 @@ static int ab8500_usb_irq_setup(struct platform_device *pdev,
 		}
 		err = devm_request_threaded_irq(&pdev->dev, irq, NULL,
 				ab8500_usb_disconnect_irq,
-				IRQF_NO_SUSPEND | IRQF_SHARED,
+				IRQF_NO_SUSPEND | IRQF_SHARED | IRQF_ONESHOT,
 				"usb-id-fall", ab);
 		if (err < 0) {
 			dev_err(ab->dev, "request_irq failed for ID fall irq\n");
@@ -1211,7 +1165,7 @@ static int ab8500_usb_irq_setup(struct platform_device *pdev,
 		}
 		err = devm_request_threaded_irq(&pdev->dev, irq, NULL,
 				ab8500_usb_disconnect_irq,
-				IRQF_NO_SUSPEND | IRQF_SHARED,
+				IRQF_NO_SUSPEND | IRQF_SHARED | IRQF_ONESHOT,
 				"usb-vbus-fall", ab);
 		if (err < 0) {
 			dev_err(ab->dev, "request_irq failed for Vbus fall irq\n");
@@ -1248,7 +1202,7 @@ static void ab8500_usb_set_ab8500_tuning_values(struct ab8500_usb *ab)
 	err = abx500_set_register_interruptible(ab->dev,
 			AB8500_DEBUG, AB8500_USB_PHY_TUNE3, 0x78);
 	if (err < 0)
-		dev_err(ab->dev, "Failed to set PHY_TUNE3 regester err=%d\n",
+		dev_err(ab->dev, "Failed to set PHY_TUNE3 register err=%d\n",
 				err);
 
 	/* Switch to normal mode/disable Bank 0x12 access */
@@ -1290,7 +1244,7 @@ static void ab8500_usb_set_ab8505_tuning_values(struct ab8500_usb *ab)
 			0xFC, 0x80);
 
 	if (err < 0)
-		dev_err(ab->dev, "Failed to set PHY_TUNE3 regester err=%d\n",
+		dev_err(ab->dev, "Failed to set PHY_TUNE3 register err=%d\n",
 				err);
 
 	/* Switch to normal mode/disable Bank 0x12 access */
@@ -1321,7 +1275,7 @@ static void ab8500_usb_set_ab8540_tuning_values(struct ab8500_usb *ab)
 	err = abx500_set_register_interruptible(ab->dev,
 			AB8540_DEBUG, AB8500_USB_PHY_TUNE3, 0x90);
 	if (err < 0)
-		dev_err(ab->dev, "Failed to set PHY_TUNE3 regester ret=%d\n",
+		dev_err(ab->dev, "Failed to set PHY_TUNE3 register ret=%d\n",
 				err);
 }
 
@@ -1351,7 +1305,7 @@ static void ab8500_usb_set_ab9540_tuning_values(struct ab8500_usb *ab)
 	err = abx500_set_register_interruptible(ab->dev,
 			AB8500_DEBUG, AB8500_USB_PHY_TUNE3, 0x80);
 	if (err < 0)
-		dev_err(ab->dev, "Failed to set PHY_TUNE3 regester err=%d\n",
+		dev_err(ab->dev, "Failed to set PHY_TUNE3 register err=%d\n",
 				err);
 
 	/* Switch to normal mode/disable Bank 0x12 access */
@@ -1392,7 +1346,6 @@ static int ab8500_usb_probe(struct platform_device *pdev)
 	ab->phy.otg		= otg;
 	ab->phy.label		= "ab8500";
 	ab->phy.set_suspend	= ab8500_usb_set_suspend;
-	ab->phy.set_power	= ab8500_usb_set_power;
 	ab->phy.otg->state	= OTG_STATE_UNDEFINED;
 
 	otg->usb_phy		= &ab->phy;
@@ -1504,7 +1457,7 @@ static int ab8500_usb_remove(struct platform_device *pdev)
 	return 0;
 }
 
-static struct platform_device_id ab8500_usb_devtype[] = {
+static const struct platform_device_id ab8500_usb_devtype[] = {
 	{ .name = "ab8500-usb", },
 	{ .name = "ab8540-usb", },
 	{ .name = "ab9540-usb", },

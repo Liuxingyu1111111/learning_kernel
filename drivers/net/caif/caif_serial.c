@@ -70,7 +70,6 @@ struct ser_device {
 	struct tty_struct *tty;
 	bool tx_started;
 	unsigned long state;
-	char *tty_name;
 #ifdef CONFIG_DEBUG_FS
 	struct dentry *debugfs_tty_dir;
 	struct debugfs_blob_wrapper tx_blob;
@@ -172,7 +171,6 @@ static void ldisc_receive(struct tty_struct *tty, const u8 *data,
 	struct sk_buff *skb = NULL;
 	struct ser_device *ser;
 	int ret;
-	u8 *p;
 
 	ser = tty->disc_data;
 
@@ -199,8 +197,7 @@ static void ldisc_receive(struct tty_struct *tty, const u8 *data,
 	skb = netdev_alloc_skb(ser->dev, count+1);
 	if (skb == NULL)
 		return;
-	p = skb_put(skb, count);
-	memcpy(p, data, count);
+	skb_put_data(skb, data, count);
 
 	skb->protocol = htons(ETH_P_CAIF);
 	skb_reset_mac_header(skb);
@@ -428,8 +425,8 @@ static void caifdev_setup(struct net_device *dev)
 	dev->type = ARPHRD_CAIF;
 	dev->flags = IFF_POINTOPOINT | IFF_NOARP;
 	dev->mtu = CAIF_MAX_MTU;
-	dev->tx_queue_len = 0;
-	dev->destructor = free_netdev;
+	dev->priv_flags |= IFF_NO_QUEUE;
+	dev->needs_free_netdev = true;
 	skb_queue_head_init(&serdev->head);
 	serdev->common.link_select = CAIF_LINK_LOW_LATENCY;
 	serdev->common.use_frag = true;

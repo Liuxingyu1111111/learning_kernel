@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * SL811HS HCD (Host Controller Driver) for USB.
  *
@@ -1091,7 +1092,7 @@ sl811h_hub_descriptor (
 ) {
 	u16		temp = 0;
 
-	desc->bDescriptorType = 0x29;
+	desc->bDescriptorType = USB_DT_HUB;
 	desc->bHubContrCurrent = 0;
 
 	desc->bNbrPorts = 1;
@@ -1118,9 +1119,9 @@ sl811h_hub_descriptor (
 }
 
 static void
-sl811h_timer(unsigned long _sl811)
+sl811h_timer(struct timer_list *t)
 {
-	struct sl811 	*sl811 = (void *) _sl811;
+	struct sl811 	*sl811 = from_timer(sl811, t, timer);
 	unsigned long	flags;
 	u8		irqstat;
 	u8		signaling = sl811->ctrl1 & SL11H_CTL1MASK_FORCE;
@@ -1259,7 +1260,7 @@ sl811h_hub_control(
 			sl811_write(sl811, SL11H_CTLREG1, sl811->ctrl1);
 
 			mod_timer(&sl811->timer, jiffies
-					+ msecs_to_jiffies(20));
+					+ msecs_to_jiffies(USB_RESUME_TIMEOUT));
 			break;
 		case USB_PORT_FEAT_POWER:
 			port_power(sl811, 0);
@@ -1554,7 +1555,7 @@ sl811h_start(struct usb_hcd *hcd)
 
 /*-------------------------------------------------------------------------*/
 
-static struct hc_driver sl811h_hc_driver = {
+static const struct hc_driver sl811h_hc_driver = {
 	.description =		hcd_name,
 	.hcd_priv_size =	sizeof(struct sl811),
 
@@ -1691,7 +1692,7 @@ sl811h_probe(struct platform_device *dev)
 	spin_lock_init(&sl811->lock);
 	INIT_LIST_HEAD(&sl811->async);
 	sl811->board = dev_get_platdata(&dev->dev);
-	setup_timer(&sl811->timer, sl811h_timer, (unsigned long)sl811);
+	timer_setup(&sl811->timer, sl811h_timer, 0);
 	sl811->addr_reg = addr_reg;
 	sl811->data_reg = data_reg;
 
@@ -1809,7 +1810,6 @@ struct platform_driver sl811h_driver = {
 	.resume =	sl811h_resume,
 	.driver = {
 		.name =	(char *) hcd_name,
-		.owner = THIS_MODULE,
 	},
 };
 EXPORT_SYMBOL(sl811h_driver);

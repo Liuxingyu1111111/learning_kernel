@@ -1,11 +1,10 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * Si5351A/B/C programmable clock generator platform_data.
  */
 
 #ifndef __LINUX_PLATFORM_DATA_SI5351_H__
 #define __LINUX_PLATFORM_DATA_SI5351_H__
-
-struct clk;
 
 /**
  * enum si5351_pll_src - Si5351 pll clock source
@@ -107,8 +106,6 @@ struct si5351_clkout_config {
  * @clkout: array of clkout configuration
  */
 struct si5351_platform_data {
-	struct clk *clk_xtal;
-	struct clk *clk_clkin;
 	enum si5351_pll_src pll_src[2];
 	struct si5351_clkout_config clkout[8];
 };

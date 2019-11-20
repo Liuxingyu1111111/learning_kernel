@@ -207,7 +207,7 @@ done:
  *	bangs.
  */
 
-dev_t name_to_dev_t(char *name)
+dev_t name_to_dev_t(const char *name)
 {
 	char s[32];
 	char *p;
@@ -225,9 +225,11 @@ dev_t name_to_dev_t(char *name)
 #endif
 
 	if (strncmp(name, "/dev/", 5) != 0) {
-		unsigned maj, min;
+		unsigned maj, min, offset;
+		char dummy;
 
-		if (sscanf(name, "%u:%u", &maj, &min) == 2) {
+		if ((sscanf(name, "%u:%u%c", &maj, &min, &dummy) == 2) ||
+		    (sscanf(name, "%u:%u:%u:%c", &maj, &min, &offset, &dummy) == 3)) {
 			res = MKDEV(maj, min);
 			if (maj != MAJOR(res) || min != MINOR(res))
 				goto fail;
@@ -286,6 +288,7 @@ fail:
 done:
 	return res;
 }
+EXPORT_SYMBOL_GPL(name_to_dev_t);
 
 static int __init root_dev_setup(char *line)
 {
@@ -370,15 +373,14 @@ static int __init do_mount_root(char *name, char *fs, int flags, void *data)
 	printk(KERN_INFO
 	       "VFS: Mounted root (%s filesystem)%s on device %u:%u.\n",
 	       s->s_type->name,
-	       s->s_flags & MS_RDONLY ?  " readonly" : "",
+	       sb_rdonly(s) ? " readonly" : "",
 	       MAJOR(ROOT_DEV), MINOR(ROOT_DEV));
 	return 0;
 }
 
 void __init mount_block_root(char *name, int flags)
 {
-	struct page *page = alloc_page(GFP_KERNEL |
-					__GFP_NOTRACK_FALSE_POSITIVE);
+	struct page *page = alloc_page(GFP_KERNEL);
 	char *fs_names = page_address(page);
 	char *p;
 #ifdef CONFIG_BLOCK
@@ -417,8 +419,8 @@ retry:
 #endif
 		panic("VFS: Unable to mount root fs on %s", b);
 	}
-	if (!(flags & MS_RDONLY)) {
-		flags |= MS_RDONLY;
+	if (!(flags & SB_RDONLY)) {
+		flags |= SB_RDONLY;
 		goto retry;
 	}
 
@@ -530,8 +532,13 @@ void __init mount_root(void)
 	}
 #endif
 #ifdef CONFIG_BLOCK
-	create_dev("/dev/root", ROOT_DEV);
-	mount_block_root("/dev/root", root_mountflags);
+	{
+		int err = create_dev("/dev/root", ROOT_DEV);
+
+		if (err < 0)
+			pr_emerg("Failed to create /dev/root: %d\n", err);
+		mount_block_root("/dev/root", root_mountflags);
+	}
 #endif
 }
 
@@ -580,7 +587,7 @@ void __init prepare_namespace(void)
 			saved_root_name);
 		while (driver_probe_done() != 0 ||
 			(ROOT_DEV = name_to_dev_t(saved_root_name)) == 0)
-			msleep(100);
+			msleep(5);
 		async_synchronize_full();
 	}
 

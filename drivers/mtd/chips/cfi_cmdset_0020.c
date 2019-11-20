@@ -206,23 +206,23 @@ static struct mtd_info *cfi_staa_setup(struct map_info *map)
 			mtd->eraseregions[(j*cfi->cfiq->NumEraseRegions)+i].numblocks = ernum;
 		}
 		offset += (ersize * ernum);
-		}
+	}
 
-		if (offset != devsize) {
-			/* Argh */
-			printk(KERN_WARNING "Sum of regions (%lx) != total size of set of interleaved chips (%lx)\n", offset, devsize);
-			kfree(mtd->eraseregions);
-			kfree(cfi->cmdset_priv);
-			kfree(mtd);
-			return NULL;
-		}
+	if (offset != devsize) {
+		/* Argh */
+		printk(KERN_WARNING "Sum of regions (%lx) != total size of set of interleaved chips (%lx)\n", offset, devsize);
+		kfree(mtd->eraseregions);
+		kfree(cfi->cmdset_priv);
+		kfree(mtd);
+		return NULL;
+	}
 
-		for (i=0; i<mtd->numeraseregions;i++){
-			printk(KERN_DEBUG "%d: offset=0x%llx,size=0x%x,blocks=%d\n",
-			       i, (unsigned long long)mtd->eraseregions[i].offset,
-			       mtd->eraseregions[i].erasesize,
-			       mtd->eraseregions[i].numblocks);
-		}
+	for (i=0; i<mtd->numeraseregions;i++){
+		printk(KERN_DEBUG "%d: offset=0x%llx,size=0x%x,blocks=%d\n",
+		       i, (unsigned long long)mtd->eraseregions[i].offset,
+		       mtd->eraseregions[i].erasesize,
+		       mtd->eraseregions[i].numblocks);
+	}
 
 	/* Also select the correct geometry setup too */
 	mtd->_erase = cfi_staa_erase_varsize;
@@ -416,7 +416,7 @@ static int cfi_staa_read (struct mtd_info *mtd, loff_t from, size_t len, size_t 
 	return ret;
 }
 
-static inline int do_write_buffer(struct map_info *map, struct flchip *chip,
+static int do_write_buffer(struct map_info *map, struct flchip *chip,
 				  unsigned long adr, const u_char *buf, int len)
 {
 	struct cfi_private *cfi = map->fldrv_priv;
@@ -666,7 +666,7 @@ cfi_staa_writev(struct mtd_info *mtd, const struct kvec *vecs,
 	size_t	 totlen = 0, thislen;
 	int	 ret = 0;
 	size_t	 buflen = 0;
-	static char *buffer;
+	char *buffer;
 
 	if (!ECCBUF_SIZE) {
 		/* We should fall back to a general writev implementation.

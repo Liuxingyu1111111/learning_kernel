@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  *  ncplib_kernel.h
  *
@@ -21,7 +22,7 @@
 #include <linux/fcntl.h>
 #include <linux/pagemap.h>
 
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <asm/byteorder.h>
 #include <asm/unaligned.h>
 #include <asm/string.h>
@@ -53,7 +54,7 @@ static inline int ncp_read_bounce_size(__u32 size) {
 	return sizeof(struct ncp_reply_header) + 2 + 2 + size + 8;
 };
 int ncp_read_bounce(struct ncp_server *, const char *, __u32, __u16, 
-		char __user *, int *, void* bounce, __u32 bouncelen);
+		struct iov_iter *, int *, void *bounce, __u32 bouncelen);
 int ncp_read_kernel(struct ncp_server *, const char *, __u32, __u16, 
 		char *, int *);
 int ncp_write_kernel(struct ncp_server *, const char *, __u32, __u16,
@@ -191,7 +192,7 @@ struct ncp_cache_head {
 	int		eof;
 };
 
-#define NCP_DIRCACHE_SIZE	((int)(PAGE_CACHE_SIZE/sizeof(struct dentry *)))
+#define NCP_DIRCACHE_SIZE	((int)(PAGE_SIZE/sizeof(struct dentry *)))
 union ncp_dir_cache {
 	struct ncp_cache_head	head;
 	struct dentry		*dentry[NCP_DIRCACHE_SIZE];

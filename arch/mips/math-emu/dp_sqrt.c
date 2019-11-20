@@ -21,7 +21,7 @@
 
 #include "ieee754dp.h"
 
-static const unsigned table[] = {
+static const unsigned int table[] = {
 	0, 1204, 3062, 5746, 9193, 13348, 18162, 23592,
 	29598, 36145, 43202, 50740, 58733, 67158, 75992,
 	85215, 83599, 71378, 60428, 50647, 41945, 34246,
@@ -33,7 +33,7 @@ union ieee754dp ieee754dp_sqrt(union ieee754dp x)
 {
 	struct _ieee754_csr oldcsr;
 	union ieee754dp y, z, t;
-	unsigned scalx, yh;
+	unsigned int scalx, yh;
 	COMPXDP;
 
 	EXPLODEXDP;
@@ -42,13 +42,12 @@ union ieee754dp ieee754dp_sqrt(union ieee754dp x)
 
 	/* x == INF or NAN? */
 	switch (xc) {
-	case IEEE754_CLASS_QNAN:
-		/* sqrt(Nan) = Nan */
+	case IEEE754_CLASS_SNAN:
 		return ieee754dp_nanxcpt(x);
 
-	case IEEE754_CLASS_SNAN:
-		ieee754_setcx(IEEE754_INVALID_OPERATION);
-		return ieee754dp_nanxcpt(ieee754dp_indef());
+	case IEEE754_CLASS_QNAN:
+		/* sqrt(Nan) = Nan */
+		return x;
 
 	case IEEE754_CLASS_ZERO:
 		/* sqrt(0) = 0 */
@@ -58,7 +57,7 @@ union ieee754dp ieee754dp_sqrt(union ieee754dp x)
 		if (xs) {
 			/* sqrt(-Inf) = Nan */
 			ieee754_setcx(IEEE754_INVALID_OPERATION);
-			return ieee754dp_nanxcpt(ieee754dp_indef());
+			return ieee754dp_indef();
 		}
 		/* sqrt(+Inf) = Inf */
 		return x;
@@ -71,7 +70,7 @@ union ieee754dp ieee754dp_sqrt(union ieee754dp x)
 		if (xs) {
 			/* sqrt(-x) = Nan */
 			ieee754_setcx(IEEE754_INVALID_OPERATION);
-			return ieee754dp_nanxcpt(ieee754dp_indef());
+			return ieee754dp_indef();
 		}
 		break;
 	}

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * qdio queue initialization
  *
@@ -91,10 +92,7 @@ EXPORT_SYMBOL_GPL(qdio_reset_buffers);
  */
 static inline int qebsm_possible(void)
 {
-#ifdef CONFIG_64BIT
 	return css_general_characteristics.qebsm;
-#endif
-	return 0;
 }
 
 /*
@@ -255,8 +253,7 @@ static void setup_queues(struct qdio_irq *irq_ptr,
 
 		tasklet_init(&q->tasklet, qdio_outbound_processing,
 			     (unsigned long) q);
-		setup_timer(&q->u.out.timer, (void(*)(unsigned long))
-			    &qdio_outbound_timer, (unsigned long)q);
+		timer_setup(&q->u.out.timer, qdio_outbound_timer, 0);
 	}
 }
 

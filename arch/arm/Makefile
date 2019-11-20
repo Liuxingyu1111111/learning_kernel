@@ -13,22 +13,24 @@
 # Ensure linker flags are correct
 LDFLAGS		:=
 
-LDFLAGS_vmlinux	:=-p --no-undefined -X
+LDFLAGS_vmlinux	:=-p --no-undefined -X --pic-veneer
 ifeq ($(CONFIG_CPU_ENDIAN_BE8),y)
 LDFLAGS_vmlinux	+= --be8
-LDFLAGS_MODULE	+= --be8
+KBUILD_LDFLAGS_MODULE	+= --be8
 endif
 
-OBJCOPYFLAGS	:=-O binary -R .comment -S
+ifeq ($(CONFIG_ARM_MODULE_PLTS),y)
+KBUILD_LDFLAGS_MODULE	+= -T $(srctree)/arch/arm/kernel/module.lds
+endif
+
 GZFLAGS		:=-9
 #KBUILD_CFLAGS	+=-pipe
 
 # Never generate .eh_frame
 KBUILD_CFLAGS	+= $(call cc-option,-fno-dwarf2-cfi-asm)
 
-# Do not use arch/arm/defconfig - it's always outdated.
-# Select a platform tht is kept up-to-date
-KBUILD_DEFCONFIG := versatile_defconfig
+# This should work on most of the modern platforms
+KBUILD_DEFCONFIG := multi_v7_defconfig
 
 # defines filename extension depending memory management type.
 ifeq ($(CONFIG_MMU),)
@@ -42,13 +44,23 @@ endif
 
 ifeq ($(CONFIG_CPU_BIG_ENDIAN),y)
 KBUILD_CPPFLAGS	+= -mbig-endian
+CHECKFLAGS	+= -D__ARMEB__
 AS		+= -EB
 LD		+= -EB
 else
 KBUILD_CPPFLAGS	+= -mlittle-endian
+CHECKFLAGS	+= -D__ARMEL__
 AS		+= -EL
 LD		+= -EL
 endif
+
+#
+# The Scalar Replacement of Aggregates (SRA) optimization pass in GCC 4.9 and
+# later may result in code being generated that handles signed short and signed
+# char struct members incorrectly. So disable it.
+# (https://gcc.gnu.org/bugzilla/show_bug.cgi?id=65932)
+#
+KBUILD_CFLAGS	+= $(call cc-option,-fno-ipa-sra)
 
 # This selects which instruction set is used.
 # Note that GCC does not numerically define an architecture version
@@ -110,7 +122,7 @@ CFLAGS_ISA	:=-mthumb $(AFLAGS_AUTOIT) $(AFLAGS_NOWARN)
 AFLAGS_ISA	:=$(CFLAGS_ISA) -Wa$(comma)-mthumb
 # Work around buggy relocation from gas if requested:
 ifeq ($(CONFIG_THUMB2_AVOID_R_ARM_THM_JUMP11),y)
-CFLAGS_MODULE	+=-fno-optimize-sibling-calls
+KBUILD_CFLAGS_MODULE	+=-fno-optimize-sibling-calls
 endif
 else
 CFLAGS_ISA	:=$(call cc-option,-marm,)
@@ -121,7 +133,7 @@ endif
 KBUILD_CFLAGS	+=$(CFLAGS_ABI) $(CFLAGS_ISA) $(arch-y) $(tune-y) $(call cc-option,-mshort-load-bytes,$(call cc-option,-malignment-traps,)) -msoft-float -Uarm
 KBUILD_AFLAGS	+=$(CFLAGS_ABI) $(AFLAGS_ISA) $(arch-y) $(tune-y) -include asm/unified.h -msoft-float
 
-CHECKFLAGS	+= -D__arm__
+CHECKFLAGS	+= -D__arm__ -m32
 
 #Default value
 head-y		:= arch/arm/kernel/head$(MMUEXT).o
@@ -129,20 +141,22 @@ head-y		:= arch/arm/kernel/head$(MMUEXT).o
 # Text offset. This list is sorted numerically by address in order to
 # provide a means to avoid/resolve conflicts in multi-arch kernels.
 textofs-y	:= 0x00008000
-textofs-$(CONFIG_ARCH_CLPS711X) := 0x00028000
 # We don't want the htc bootloader to corrupt kernel during resume
 textofs-$(CONFIG_PM_H1940)      := 0x00108000
 # SA1111 DMA bug: we don't want the kernel to live in precious DMA-able memory
 ifeq ($(CONFIG_ARCH_SA1100),y)
 textofs-$(CONFIG_SA1111) := 0x00208000
 endif
-textofs-$(CONFIG_ARCH_MSM7X30) := 0x00208000
 textofs-$(CONFIG_ARCH_MSM8X60) := 0x00208000
 textofs-$(CONFIG_ARCH_MSM8960) := 0x00208000
+textofs-$(CONFIG_ARCH_MESON) := 0x00208000
 textofs-$(CONFIG_ARCH_AXXIA) := 0x00308000
 
 # Machine directory name.  This list is sorted alphanumerically
 # by CONFIG_* macro name.
+machine-$(CONFIG_ARCH_ACTIONS)		+= actions
+machine-$(CONFIG_ARCH_ALPINE)		+= alpine
+machine-$(CONFIG_ARCH_ARTPEC)		+= artpec
 machine-$(CONFIG_ARCH_AT91)		+= at91
 machine-$(CONFIG_ARCH_AXXIA)		+= axxia
 machine-$(CONFIG_ARCH_BCM)		+= bcm
@@ -167,11 +181,12 @@ machine-$(CONFIG_ARCH_IOP33X)		+= iop33x
 machine-$(CONFIG_ARCH_IXP4XX)		+= ixp4xx
 machine-$(CONFIG_ARCH_KEYSTONE)		+= keystone
 machine-$(CONFIG_ARCH_KS8695)		+= ks8695
+machine-$(CONFIG_ARCH_LPC18XX)		+= lpc18xx
 machine-$(CONFIG_ARCH_LPC32XX)		+= lpc32xx
 machine-$(CONFIG_ARCH_MESON)		+= meson
 machine-$(CONFIG_ARCH_MMP)		+= mmp
+machine-$(CONFIG_ARCH_MPS2)		+= vexpress
 machine-$(CONFIG_ARCH_MOXART)		+= moxart
-machine-$(CONFIG_ARCH_MSM)		+= msm
 machine-$(CONFIG_ARCH_MV78XX0)		+= mv78xx0
 machine-$(CONFIG_ARCH_MVEBU)		+= mvebu
 machine-$(CONFIG_ARCH_MXC)		+= imx
@@ -180,6 +195,7 @@ machine-$(CONFIG_ARCH_MXS)		+= mxs
 machine-$(CONFIG_ARCH_NETX)		+= netx
 machine-$(CONFIG_ARCH_NOMADIK)		+= nomadik
 machine-$(CONFIG_ARCH_NSPIRE)		+= nspire
+machine-$(CONFIG_ARCH_OXNAS)		+= oxnas
 machine-$(CONFIG_ARCH_OMAP1)		+= omap1
 machine-$(CONFIG_ARCH_OMAP2PLUS)	+= omap2
 machine-$(CONFIG_ARCH_ORION5X)		+= orion5x
@@ -197,14 +213,18 @@ machine-$(CONFIG_ARCH_SHMOBILE) 	+= shmobile
 machine-$(CONFIG_ARCH_SIRF)		+= prima2
 machine-$(CONFIG_ARCH_SOCFPGA)		+= socfpga
 machine-$(CONFIG_ARCH_STI)		+= sti
+machine-$(CONFIG_ARCH_STM32)		+= stm32
 machine-$(CONFIG_ARCH_SUNXI)		+= sunxi
+machine-$(CONFIG_ARCH_TANGO)		+= tango
 machine-$(CONFIG_ARCH_TEGRA)		+= tegra
 machine-$(CONFIG_ARCH_U300)		+= u300
 machine-$(CONFIG_ARCH_U8500)		+= ux500
+machine-$(CONFIG_ARCH_UNIPHIER)		+= uniphier
 machine-$(CONFIG_ARCH_VERSATILE)	+= versatile
 machine-$(CONFIG_ARCH_VEXPRESS)		+= vexpress
 machine-$(CONFIG_ARCH_VT8500)		+= vt8500
 machine-$(CONFIG_ARCH_W90X900)		+= w90x900
+machine-$(CONFIG_ARCH_ZX)		+= zx
 machine-$(CONFIG_ARCH_ZYNQ)		+= zynq
 machine-$(CONFIG_PLAT_SPEAR)		+= spear
 
@@ -244,10 +264,12 @@ machdirs := $(patsubst %,arch/arm/mach-%/,$(machine-y))
 platdirs := $(patsubst %,arch/arm/plat-%/,$(sort $(plat-y)))
 
 ifneq ($(CONFIG_ARCH_MULTIPLATFORM),y)
+ifneq ($(CONFIG_ARM_SINGLE_ARMV7M),y)
 ifeq ($(KBUILD_SRC),)
 KBUILD_CPPFLAGS += $(patsubst %,-I%include,$(machdirs) $(platdirs))
 else
 KBUILD_CPPFLAGS += $(patsubst %,-I$(srctree)/%include,$(machdirs) $(platdirs))
+endif
 endif
 endif
 
@@ -264,6 +286,7 @@ core-$(CONFIG_FPE_FASTFPE)	+= $(FASTFPE_OBJ)
 core-$(CONFIG_VFP)		+= arch/arm/vfp/
 core-$(CONFIG_XEN)		+= arch/arm/xen/
 core-$(CONFIG_KVM_ARM_HOST) 	+= arch/arm/kvm/
+core-$(CONFIG_VDSO)		+= arch/arm/vdso/
 
 # If we have a machine-specific directory, then include it in the build.
 core-y				+= arch/arm/kernel/ arch/arm/mm/ arch/arm/common/
@@ -278,10 +301,11 @@ drivers-$(CONFIG_OPROFILE)      += arch/arm/oprofile/
 libs-y				:= arch/arm/lib/ $(libs-y)
 
 # Default target when executing plain make
+boot := arch/arm/boot
 ifeq ($(CONFIG_XIP_KERNEL),y)
-KBUILD_IMAGE := xipImage
+KBUILD_IMAGE := $(boot)/xipImage
 else
-KBUILD_IMAGE := zImage
+KBUILD_IMAGE := $(boot)/zImage
 endif
 
 # Build the DT binary blobs if we have OF configured
@@ -289,12 +313,14 @@ ifeq ($(CONFIG_USE_OF),y)
 KBUILD_DTBS := dtbs
 endif
 
-all:	$(KBUILD_IMAGE) $(KBUILD_DTBS)
+all:	$(notdir $(KBUILD_IMAGE)) $(KBUILD_DTBS)
 
-boot := arch/arm/boot
+
+archheaders:
+	$(Q)$(MAKE) $(build)=arch/arm/tools uapi
 
 archprepare:
-	$(Q)$(MAKE) $(build)=arch/arm/tools include/generated/mach-types.h
+	$(Q)$(MAKE) $(build)=arch/arm/tools kapi
 
 # Convert bzImage to zImage
 bzImage: zImage
@@ -304,8 +330,12 @@ INSTALL_TARGETS	= zinstall uinstall install
 
 PHONY += bzImage $(BOOT_TARGETS) $(INSTALL_TARGETS)
 
+bootpImage uImage: zImage
+zImage: Image
+
 $(BOOT_TARGETS): vmlinux
 	$(Q)$(MAKE) $(build)=$(boot) MACHINE=$(MACHINE) $(boot)/$@
+	@$(kecho) '  Kernel: $(boot)/$@ is ready'
 
 $(INSTALL_TARGETS):
 	$(Q)$(MAKE) $(build)=$(boot) MACHINE=$(MACHINE) $@
@@ -321,13 +351,18 @@ dtbs: prepare scripts
 dtbs_install:
 	$(Q)$(MAKE) $(dtbinst)=$(boot)/dts
 
+PHONY += vdso_install
+vdso_install:
+ifeq ($(CONFIG_VDSO),y)
+	$(Q)$(MAKE) $(build)=arch/arm/vdso $@
+endif
+
 # We use MRPROPER_FILES and CLEAN_FILES now
 archclean:
 	$(Q)$(MAKE) $(clean)=$(boot)
 
 # My testing targets (bypasses dependencies)
 bp:;	$(Q)$(MAKE) $(build)=$(boot) MACHINE=$(MACHINE) $(boot)/bootpImage
-i zi:;	$(Q)$(MAKE) $(build)=$(boot) MACHINE=$(MACHINE) $@
 
 
 define archhelp
@@ -345,4 +380,5 @@ define archhelp
   echo  '                  Install using (your) ~/bin/$(INSTALLKERNEL) or'
   echo  '                  (distribution) /sbin/$(INSTALLKERNEL) or'
   echo  '                  install to $$(INSTALL_PATH) and run lilo'
+  echo  '  vdso_install  - Install unstripped vdso.so to $$(INSTALL_MOD_PATH)/vdso'
 endef

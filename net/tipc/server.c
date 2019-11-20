@@ -36,12 +36,16 @@
 #include "server.h"
 #include "core.h"
 #include "socket.h"
+#include "addr.h"
+#include "msg.h"
 #include <net/sock.h>
+#include <linux/module.h>
 
 /* Number of messages to send before rescheduling */
 #define MAX_SEND_MSG_COUNT	25
 #define MAX_RECV_MSG_COUNT	25
 #define CF_CONNECTED		1
+#define CF_SERVER		2
 
 #define sock2con(x) ((struct tipc_conn *)(x)->sk_user_data)
 
@@ -88,12 +92,26 @@ static void tipc_clean_outqueues(struct tipc_conn *con);
 static void tipc_conn_kref_release(struct kref *kref)
 {
 	struct tipc_conn *con = container_of(kref, struct tipc_conn, kref);
+	struct tipc_server *s = con->server;
+	struct sockaddr_tipc *saddr = s->saddr;
+	struct socket *sock = con->sock;
+	struct sock *sk;
 
-	if (con->sock) {
-		tipc_sock_release_local(con->sock);
+	if (sock) {
+		sk = sock->sk;
+		if (test_bit(CF_SERVER, &con->flags)) {
+			__module_get(sock->ops->owner);
+			__module_get(sk->sk_prot_creator->owner);
+		}
+		saddr->scope = -TIPC_NODE_SCOPE;
+		kernel_bind(sock, (struct sockaddr *)saddr, sizeof(*saddr));
+		sock_release(sock);
 		con->sock = NULL;
 	}
-
+	spin_lock_bh(&s->idr_lock);
+	idr_remove(&s->conn_idr, con->conid);
+	s->idr_in_use--;
+	spin_unlock_bh(&s->idr_lock);
 	tipc_clean_outqueues(con);
 	kfree(con);
 }
@@ -114,8 +132,10 @@ static struct tipc_conn *tipc_conn_lookup(struct tipc_server *s, int conid)
 
 	spin_lock_bh(&s->idr_lock);
 	con = idr_find(&s->conn_idr, conid);
-	if (con)
+	if (con && test_bit(CF_CONNECTED, &con->flags))
 		conn_get(con);
+	else
+		con = NULL;
 	spin_unlock_bh(&s->idr_lock);
 	return con;
 }
@@ -124,28 +144,28 @@ static void sock_data_ready(struct sock *sk)
 {
 	struct tipc_conn *con;
 
-	read_lock(&sk->sk_callback_lock);
+	read_lock_bh(&sk->sk_callback_lock);
 	con = sock2con(sk);
 	if (con && test_bit(CF_CONNECTED, &con->flags)) {
 		conn_get(con);
 		if (!queue_work(con->server->rcv_wq, &con->rwork))
 			conn_put(con);
 	}
-	read_unlock(&sk->sk_callback_lock);
+	read_unlock_bh(&sk->sk_callback_lock);
 }
 
 static void sock_write_space(struct sock *sk)
 {
 	struct tipc_conn *con;
 
-	read_lock(&sk->sk_callback_lock);
+	read_lock_bh(&sk->sk_callback_lock);
 	con = sock2con(sk);
 	if (con && test_bit(CF_CONNECTED, &con->flags)) {
 		conn_get(con);
 		if (!queue_work(con->server->send_wq, &con->swork))
 			conn_put(con);
 	}
-	read_unlock(&sk->sk_callback_lock);
+	read_unlock_bh(&sk->sk_callback_lock);
 }
 
 static void tipc_register_callbacks(struct socket *sock, struct tipc_conn *con)
@@ -177,24 +197,19 @@ static void tipc_close_conn(struct tipc_conn *con)
 	struct tipc_server *s = con->server;
 
 	if (test_and_clear_bit(CF_CONNECTED, &con->flags)) {
+		if (con->sock)
+			tipc_unregister_callbacks(con);
+
 		if (con->conid)
-			s->tipc_conn_shutdown(con->conid, con->usr_data);
-
-		spin_lock_bh(&s->idr_lock);
-		idr_remove(&s->conn_idr, con->conid);
-		s->idr_in_use--;
-		spin_unlock_bh(&s->idr_lock);
-
-		tipc_unregister_callbacks(con);
+			s->tipc_conn_release(con->conid, con->usr_data);
 
 		/* We shouldn't flush pending works as we may be in the
 		 * thread. In fact the races with pending rx/tx work structs
 		 * are harmless for us here as we have already deleted this
-		 * connection from server connection list and set
-		 * sk->sk_user_data to 0 before releasing connection object.
+		 * connection from server connection list.
 		 */
-		kernel_sock_shutdown(con->sock, SHUT_RDWR);
-
+		if (con->sock)
+			kernel_sock_shutdown(con->sock, SHUT_RDWR);
 		conn_put(con);
 	}
 }
@@ -281,7 +296,7 @@ static int tipc_accept_from_sock(struct tipc_conn *con)
 	struct tipc_conn *newcon;
 	int ret;
 
-	ret = tipc_sock_accept_local(sock, &newsock, O_NONBLOCK);
+	ret = kernel_accept(sock, &newsock, O_NONBLOCK);
 	if (ret < 0)
 		return ret;
 
@@ -297,6 +312,11 @@ static int tipc_accept_from_sock(struct tipc_conn *con)
 
 	/* Notify that new connection is incoming */
 	newcon->usr_data = s->tipc_conn_new(newcon->conid);
+	if (!newcon->usr_data) {
+		sock_release(newsock);
+		conn_put(newcon);
+		return -ENOMEM;
+	}
 
 	/* Wake up receive process in case of 'SYN+' message */
 	newsock->sk->sk_data_ready(newsock->sk);
@@ -309,7 +329,7 @@ static struct socket *tipc_create_listen_sock(struct tipc_conn *con)
 	struct socket *sock = NULL;
 	int ret;
 
-	ret = tipc_sock_create_local(s->net, s->type, &sock);
+	ret = sock_create_kern(s->net, AF_TIPC, SOCK_SEQPACKET, 0, &sock);
 	if (ret < 0)
 		return NULL;
 	ret = kernel_setsockopt(sock, SOL_TIPC, TIPC_IMPORTANCE,
@@ -337,11 +357,31 @@ static struct socket *tipc_create_listen_sock(struct tipc_conn *con)
 		pr_err("Unknown socket type %d\n", s->type);
 		goto create_err;
 	}
+
+	/* As server's listening socket owner and creator is the same module,
+	 * we have to decrease TIPC module reference count to guarantee that
+	 * it remains zero after the server socket is created, otherwise,
+	 * executing "rmmod" command is unable to make TIPC module deleted
+	 * after TIPC module is inserted successfully.
+	 *
+	 * However, the reference count is ever increased twice in
+	 * sock_create_kern(): one is to increase the reference count of owner
+	 * of TIPC socket's proto_ops struct; another is to increment the
+	 * reference count of owner of TIPC proto struct. Therefore, we must
+	 * decrement the module reference count twice to ensure that it keeps
+	 * zero after server's listening socket is created. Of course, we
+	 * must bump the module reference count twice as well before the socket
+	 * is closed.
+	 */
+	module_put(sock->ops->owner);
+	module_put(sock->sk->sk_prot_creator->owner);
+	set_bit(CF_SERVER, &con->flags);
+
 	return sock;
 
 create_err:
+	kernel_sock_shutdown(sock, SHUT_RDWR);
 	sock_release(sock);
-	con->sock = NULL;
 	return NULL;
 }
 
@@ -375,13 +415,12 @@ static struct outqueue_entry *tipc_alloc_entry(void *data, int len)
 	if (!entry)
 		return NULL;
 
-	buf = kmalloc(len, GFP_ATOMIC);
+	buf = kmemdup(data, len, GFP_ATOMIC);
 	if (!buf) {
 		kfree(entry);
 		return NULL;
 	}
 
-	memcpy(buf, data, len);
 	entry->iov.iov_base = buf;
 	entry->iov.iov_len = len;
 
@@ -416,6 +455,11 @@ int tipc_conn_sendmsg(struct tipc_server *s, int conid,
 	if (!con)
 		return -EINVAL;
 
+	if (!test_bit(CF_CONNECTED, &con->flags)) {
+		conn_put(con);
+		return 0;
+	}
+
 	e = tipc_alloc_entry(data, len);
 	if (!e) {
 		conn_put(con);
@@ -429,12 +473,8 @@ int tipc_conn_sendmsg(struct tipc_server *s, int conid,
 	list_add_tail(&e->list, &con->outqueue);
 	spin_unlock_bh(&con->outqueue_lock);
 
-	if (test_bit(CF_CONNECTED, &con->flags)) {
-		if (!queue_work(s->send_wq, &con->swork))
-			conn_put(con);
-	} else {
+	if (!queue_work(s->send_wq, &con->swork))
 		conn_put(con);
-	}
 	return 0;
 }
 
@@ -449,38 +489,104 @@ void tipc_conn_terminate(struct tipc_server *s, int conid)
 	}
 }
 
+bool tipc_topsrv_kern_subscr(struct net *net, u32 port, u32 type,
+			     u32 lower, u32 upper, int *conid)
+{
+	struct tipc_subscriber *scbr;
+	struct tipc_subscr sub;
+	struct tipc_server *s;
+	struct tipc_conn *con;
+
+	sub.seq.type = type;
+	sub.seq.lower = lower;
+	sub.seq.upper = upper;
+	sub.timeout = TIPC_WAIT_FOREVER;
+	sub.filter = TIPC_SUB_PORTS;
+	*(u32 *)&sub.usr_handle = port;
+
+	con = tipc_alloc_conn(tipc_topsrv(net));
+	if (IS_ERR(con))
+		return false;
+
+	*conid = con->conid;
+	s = con->server;
+	scbr = s->tipc_conn_new(*conid);
+	if (!scbr) {
+		conn_put(con);
+		return false;
+	}
+
+	con->usr_data = scbr;
+	con->sock = NULL;
+	s->tipc_conn_recvmsg(net, *conid, NULL, scbr, &sub, sizeof(sub));
+	return true;
+}
+
+void tipc_topsrv_kern_unsubscr(struct net *net, int conid)
+{
+	struct tipc_conn *con;
+
+	con = tipc_conn_lookup(tipc_topsrv(net), conid);
+	if (!con)
+		return;
+	tipc_close_conn(con);
+	conn_put(con);
+}
+
+static void tipc_send_kern_top_evt(struct net *net, struct tipc_event *evt)
+{
+	u32 port = *(u32 *)&evt->s.usr_handle;
+	u32 self = tipc_own_addr(net);
+	struct sk_buff_head evtq;
+	struct sk_buff *skb;
+
+	skb = tipc_msg_create(TOP_SRV, 0, INT_H_SIZE, sizeof(*evt),
+			      self, self, port, port, 0);
+	if (!skb)
+		return;
+	msg_set_dest_droppable(buf_msg(skb), true);
+	memcpy(msg_data(buf_msg(skb)), evt, sizeof(*evt));
+	skb_queue_head_init(&evtq);
+	__skb_queue_tail(&evtq, skb);
+	tipc_sk_rcv(net, &evtq);
+}
+
 static void tipc_send_to_sock(struct tipc_conn *con)
 {
-	int count = 0;
 	struct tipc_server *s = con->server;
 	struct outqueue_entry *e;
+	struct tipc_event *evt;
 	struct msghdr msg;
+	int count = 0;
 	int ret;
 
 	spin_lock_bh(&con->outqueue_lock);
-	while (1) {
-		e = list_entry(con->outqueue.next, struct outqueue_entry,
-			       list);
+	while (test_bit(CF_CONNECTED, &con->flags)) {
+		e = list_entry(con->outqueue.next, struct outqueue_entry, list);
 		if ((struct list_head *) e == &con->outqueue)
 			break;
+
 		spin_unlock_bh(&con->outqueue_lock);
 
-		memset(&msg, 0, sizeof(msg));
-		msg.msg_flags = MSG_DONTWAIT;
-
-		if (s->type == SOCK_DGRAM || s->type == SOCK_RDM) {
-			msg.msg_name = &e->dest;
-			msg.msg_namelen = sizeof(struct sockaddr_tipc);
+		if (con->sock) {
+			memset(&msg, 0, sizeof(msg));
+			msg.msg_flags = MSG_DONTWAIT;
+			if (s->type == SOCK_DGRAM || s->type == SOCK_RDM) {
+				msg.msg_name = &e->dest;
+				msg.msg_namelen = sizeof(struct sockaddr_tipc);
+			}
+			ret = kernel_sendmsg(con->sock, &msg, &e->iov, 1,
+					     e->iov.iov_len);
+			if (ret == -EWOULDBLOCK || ret == 0) {
+				cond_resched();
+				goto out;
+			} else if (ret < 0) {
+				goto send_err;
+			}
+		} else {
+			evt = e->iov.iov_base;
+			tipc_send_kern_top_evt(s->net, evt);
 		}
-		ret = kernel_sendmsg(con->sock, &msg, &e->iov, 1,
-				     e->iov.iov_len);
-		if (ret == -EWOULDBLOCK || ret == 0) {
-			cond_resched();
-			goto out;
-		} else if (ret < 0) {
-			goto send_err;
-		}
-
 		/* Don't starve users filling buffers */
 		if (++count >= MAX_SEND_MSG_COUNT) {
 			cond_resched();
@@ -535,13 +641,13 @@ static void tipc_work_stop(struct tipc_server *s)
 
 static int tipc_work_start(struct tipc_server *s)
 {
-	s->rcv_wq = alloc_workqueue("tipc_rcv", WQ_UNBOUND, 1);
+	s->rcv_wq = alloc_ordered_workqueue("tipc_rcv", 0);
 	if (!s->rcv_wq) {
 		pr_err("can't start tipc receive workqueue\n");
 		return -ENOMEM;
 	}
 
-	s->send_wq = alloc_workqueue("tipc_send", WQ_UNBOUND, 1);
+	s->send_wq = alloc_ordered_workqueue("tipc_send", 0);
 	if (!s->send_wq) {
 		pr_err("can't start tipc send workqueue\n");
 		destroy_workqueue(s->rcv_wq);
@@ -581,14 +687,12 @@ int tipc_server_start(struct tipc_server *s)
 void tipc_server_stop(struct tipc_server *s)
 {
 	struct tipc_conn *con;
-	int total = 0;
 	int id;
 
 	spin_lock_bh(&s->idr_lock);
-	for (id = 0; total < s->idr_in_use; id++) {
+	for (id = 0; s->idr_in_use; id++) {
 		con = idr_find(&s->conn_idr, id);
 		if (con) {
-			total++;
 			spin_unlock_bh(&s->idr_lock);
 			tipc_close_conn(con);
 			spin_lock_bh(&s->idr_lock);

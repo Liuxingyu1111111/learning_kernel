@@ -36,16 +36,17 @@
 #include <linux/file.h>
 #include <linux/personality.h>
 
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <asm/syscalls.h>
 #include <asm/time.h>
 #include <asm/unistd.h>
+#include <asm/asm-prototypes.h>
 
-static inline unsigned long do_mmap2(unsigned long addr, size_t len,
+static inline long do_mmap2(unsigned long addr, size_t len,
 			unsigned long prot, unsigned long flags,
 			unsigned long fd, unsigned long off, int shift)
 {
-	unsigned long ret = -EINVAL;
+	long ret = -EINVAL;
 
 	if (!arch_validate_prot(prot))
 		goto out;
@@ -61,16 +62,16 @@ out:
 	return ret;
 }
 
-unsigned long sys_mmap2(unsigned long addr, size_t len,
-			unsigned long prot, unsigned long flags,
-			unsigned long fd, unsigned long pgoff)
+SYSCALL_DEFINE6(mmap2, unsigned long, addr, size_t, len,
+		unsigned long, prot, unsigned long, flags,
+		unsigned long, fd, unsigned long, pgoff)
 {
 	return do_mmap2(addr, len, prot, flags, fd, pgoff, PAGE_SHIFT-12);
 }
 
-unsigned long sys_mmap(unsigned long addr, size_t len,
-		       unsigned long prot, unsigned long flags,
-		       unsigned long fd, off_t offset)
+SYSCALL_DEFINE6(mmap, unsigned long, addr, size_t, len,
+		unsigned long, prot, unsigned long, flags,
+		unsigned long, fd, off_t, offset)
 {
 	return do_mmap2(addr, len, prot, flags, fd, offset, PAGE_SHIFT);
 }
@@ -120,4 +121,21 @@ long ppc_fadvise64_64(int fd, int advice, u32 offset_high, u32 offset_low,
 {
 	return sys_fadvise64(fd, (u64)offset_high << 32 | offset_low,
 			     (u64)len_high << 32 | len_low, advice);
+}
+
+long sys_switch_endian(void)
+{
+	struct thread_info *ti;
+
+	current->thread.regs->msr ^= MSR_LE;
+
+	/*
+	 * Set TIF_RESTOREALL so that r3 isn't clobbered on return to
+	 * userspace. That also has the effect of restoring the non-volatile
+	 * GPRs, so we saved them on the way in here.
+	 */
+	ti = current_thread_info();
+	ti->flags |= _TIF_RESTOREALL;
+
+	return 0;
 }

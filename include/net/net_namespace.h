@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * Operations on the network namespace
  */
@@ -5,6 +6,7 @@
 #define __NET_NET_NAMESPACE_H
 
 #include <linux/atomic.h>
+#include <linux/refcount.h>
 #include <linux/workqueue.h>
 #include <linux/list.h>
 #include <linux/sysctl.h>
@@ -26,7 +28,11 @@
 #endif
 #include <net/netns/nftables.h>
 #include <net/netns/xfrm.h>
+#include <net/netns/mpls.h>
+#include <net/netns/can.h>
 #include <linux/ns_common.h>
+#include <linux/idr.h>
+#include <linux/skbuff.h>
 
 struct user_namespace;
 struct proc_dir_entry;
@@ -42,24 +48,23 @@ struct netns_ipvs;
 #define NETDEV_HASHENTRIES (1 << NETDEV_HASHBITS)
 
 struct net {
-	atomic_t		passive;	/* To decided when the network
+	refcount_t		passive;	/* To decided when the network
 						 * namespace should be freed.
 						 */
 	atomic_t		count;		/* To decided when the network
 						 *  namespace should be shut down.
 						 */
-#ifdef NETNS_REFCNT_DEBUG
-	atomic_t		use_count;	/* To track references we
-						 * destroy on demand
-						 */
-#endif
 	spinlock_t		rules_mod_lock;
+
+	atomic64_t		cookie_gen;
 
 	struct list_head	list;		/* list of network namespaces */
 	struct list_head	cleanup_list;	/* namespaces on death row */
 	struct list_head	exit_list;	/* Use only net_mutex */
 
 	struct user_namespace   *user_ns;	/* Owning user namespace */
+	struct ucounts		*ucounts;
+	spinlock_t		nsid_lock;
 	struct idr		netns_ids;
 
 	struct ns_common	ns;
@@ -84,6 +89,7 @@ struct net {
 	/* core fib_rules */
 	struct list_head	rules_ops;
 
+	struct list_head	fib_notifier_ops;  /* protected by net_mutex */
 
 	struct net_device       *loopback_dev;          /* The loopback */
 	struct netns_core	core;
@@ -117,6 +123,12 @@ struct net {
 #endif
 	struct sock		*nfnl;
 	struct sock		*nfnl_stash;
+#if IS_ENABLED(CONFIG_NETFILTER_NETLINK_ACCT)
+	struct list_head        nfnl_acct_list;
+#endif
+#if IS_ENABLED(CONFIG_NF_CT_NETLINK_TIMEOUT)
+	struct list_head	nfct_timeout_list;
+#endif
 #endif
 #ifdef CONFIG_WEXT_CORE
 	struct sk_buff_head	wext_nlevents;
@@ -130,9 +142,15 @@ struct net {
 #if IS_ENABLED(CONFIG_IP_VS)
 	struct netns_ipvs	*ipvs;
 #endif
+#if IS_ENABLED(CONFIG_MPLS)
+	struct netns_mpls	mpls;
+#endif
+#if IS_ENABLED(CONFIG_CAN)
+	struct netns_can	can;
+#endif
 	struct sock		*diag_nlsk;
 	atomic_t		fnhe_genid;
-};
+} __randomize_layout;
 
 #include <linux/seq_file_net.h>
 
@@ -143,6 +161,7 @@ extern struct net init_net;
 struct net *copy_net_ns(unsigned long flags, struct user_namespace *user_ns,
 			struct net *old_net);
 
+void net_ns_barrier(void);
 #else /* CONFIG_NET_NS */
 #include <linux/sched.h>
 #include <linux/nsproxy.h>
@@ -153,13 +172,15 @@ static inline struct net *copy_net_ns(unsigned long flags,
 		return ERR_PTR(-EINVAL);
 	return old_net;
 }
+
+static inline void net_ns_barrier(void) {}
 #endif /* CONFIG_NET_NS */
 
 
 extern struct list_head net_namespace_list;
 
 struct net *get_net_ns_by_pid(pid_t pid);
-struct net *get_net_ns_by_fd(int pid);
+struct net *get_net_ns_by_fd(int fd);
 
 #ifdef CONFIG_SYSCTL
 void ipx_register_sysctl(void);
@@ -202,6 +223,11 @@ int net_eq(const struct net *net1, const struct net *net2)
 	return net1 == net2;
 }
 
+static inline int check_net(const struct net *net)
+{
+	return atomic_read(&net->count) != 0;
+}
+
 void net_drop_ns(void *);
 
 #else
@@ -226,52 +252,36 @@ int net_eq(const struct net *net1, const struct net *net2)
 	return 1;
 }
 
+static inline int check_net(const struct net *net)
+{
+	return 1;
+}
+
 #define net_drop_ns NULL
 #endif
 
 
-#ifdef NETNS_REFCNT_DEBUG
-static inline struct net *hold_net(struct net *net)
-{
-	if (net)
-		atomic_inc(&net->use_count);
-	return net;
-}
-
-static inline void release_net(struct net *net)
-{
-	if (net)
-		atomic_dec(&net->use_count);
-}
-#else
-static inline struct net *hold_net(struct net *net)
-{
-	return net;
-}
-
-static inline void release_net(struct net *net)
-{
-}
-#endif
-
+typedef struct {
 #ifdef CONFIG_NET_NS
-
-static inline void write_pnet(struct net **pnet, struct net *net)
-{
-	*pnet = net;
-}
-
-static inline struct net *read_pnet(struct net * const *pnet)
-{
-	return *pnet;
-}
-
-#else
-
-#define write_pnet(pnet, net)	do { (void)(net);} while (0)
-#define read_pnet(pnet)		(&init_net)
-
+	struct net *net;
 #endif
+} possible_net_t;
+
+static inline void write_pnet(possible_net_t *pnet, struct net *net)
+{
+#ifdef CONFIG_NET_NS
+	pnet->net = net;
+#endif
+}
+
+static inline struct net *read_pnet(const possible_net_t *pnet)
+{
+#ifdef CONFIG_NET_NS
+	return pnet->net;
+#else
+	return &init_net;
+#endif
+}
 
 #define for_each_net(VAR)				\
 	list_for_each_entry(VAR, &net_namespace_list, list)
@@ -286,12 +296,14 @@ static inline struct net *read_pnet(struct net * const *pnet)
 #define __net_initconst
 #else
 #define __net_init	__init
-#define __net_exit	__exit_refok
+#define __net_exit	__ref
 #define __net_initdata	__initdata
 #define __net_initconst	__initconst
 #endif
 
+int peernet2id_alloc(struct net *net, struct net *peer);
 int peernet2id(struct net *net, struct net *peer);
+bool peernet_has_id(struct net *net, struct net *peer);
 struct net *get_net_ns_by_id(struct net *net, int id);
 
 struct pernet_operations {
@@ -299,7 +311,7 @@ struct pernet_operations {
 	int (*init)(struct net *net);
 	void (*exit)(struct net *net);
 	void (*exit_batch)(struct list_head *net_exit_list);
-	int *id;
+	unsigned int *id;
 	size_t size;
 };
 

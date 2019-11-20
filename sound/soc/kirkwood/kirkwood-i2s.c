@@ -538,10 +538,9 @@ static int kirkwood_i2s_dev_probe(struct platform_device *pdev)
 	int err;
 
 	priv = devm_kzalloc(&pdev->dev, sizeof(*priv), GFP_KERNEL);
-	if (!priv) {
-		dev_err(&pdev->dev, "allocation failed\n");
+	if (!priv)
 		return -ENOMEM;
-	}
+
 	dev_set_drvdata(&pdev->dev, priv);
 
 	mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
@@ -550,9 +549,9 @@ static int kirkwood_i2s_dev_probe(struct platform_device *pdev)
 		return PTR_ERR(priv->io);
 
 	priv->irq = platform_get_irq(pdev, 0);
-	if (priv->irq <= 0) {
-		dev_err(&pdev->dev, "platform_get_irq failed\n");
-		return -ENXIO;
+	if (priv->irq < 0) {
+		dev_err(&pdev->dev, "platform_get_irq failed: %d\n", priv->irq);
+		return priv->irq;
 	}
 
 	if (np) {
@@ -643,7 +642,7 @@ static int kirkwood_i2s_dev_remove(struct platform_device *pdev)
 }
 
 #ifdef CONFIG_OF
-static struct of_device_id mvebu_audio_of_match[] = {
+static const struct of_device_id mvebu_audio_of_match[] = {
 	{ .compatible = "marvell,kirkwood-audio" },
 	{ .compatible = "marvell,dove-audio" },
 	{ .compatible = "marvell,armada370-audio" },

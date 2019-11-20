@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * pcic.c: MicroSPARC-IIep PCI controller support
  *
@@ -33,7 +34,7 @@
 #include <asm/pcic.h>
 #include <asm/timex.h>
 #include <asm/timer.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <asm/irq_regs.h>
 
 #include "kernel.h"
@@ -391,12 +392,16 @@ static void __init pcic_pbm_scan_bus(struct linux_pcic *pcic)
 	struct linux_pbm_info *pbm = &pcic->pbm;
 
 	pbm->pci_bus = pci_scan_bus(pbm->pci_first_busno, &pcic_ops, pbm);
+	if (!pbm->pci_bus)
+		return;
+
 #if 0 /* deadwood transplanted from sparc64 */
 	pci_fill_in_pbm_cookies(pbm->pci_bus, pbm, pbm->prom_node);
 	pci_record_assignments(pbm, pbm->pci_bus);
 	pci_assign_unassigned(pbm, pbm->pci_bus);
 	pci_fixup_irq(pbm, pbm->pci_bus);
 #endif
+	pci_bus_add_devices(pbm->pci_bus);
 }
 
 /*
@@ -598,7 +603,7 @@ void pcibios_fixup_bus(struct pci_bus *bus)
 {
 	struct pci_dev *dev;
 	int i, has_io, has_mem;
-	unsigned int cmd;
+	unsigned int cmd = 0;
 	struct linux_pcic *pcic;
 	/* struct linux_pbm_info* pbm = &pcic->pbm; */
 	int node;
@@ -741,12 +746,6 @@ static void watchdog_reset() {
 	writeb(0, pcic->pcic_regs+PCI_SYS_STATUS);
 }
 #endif
-
-resource_size_t pcibios_align_resource(void *data, const struct resource *res,
-				resource_size_t size, resource_size_t align)
-{
-	return res->start;
-}
 
 int pcibios_enable_device(struct pci_dev *pdev, int mask)
 {

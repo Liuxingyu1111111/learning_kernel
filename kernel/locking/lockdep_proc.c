@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * kernel/lockdep_proc.c
  *
@@ -6,7 +7,7 @@
  * Started by Ingo Molnar:
  *
  *  Copyright (C) 2006,2007 Red Hat, Inc., Ingo Molnar <mingo@redhat.com>
- *  Copyright (C) 2007 Red Hat, Inc., Peter Zijlstra <pzijlstr@redhat.com>
+ *  Copyright (C) 2007 Red Hat, Inc., Peter Zijlstra
  *
  * Code for /proc/lockdep and /proc/lockdep_stats:
  *
@@ -18,7 +19,7 @@
 #include <linux/debug_locks.h>
 #include <linux/vmalloc.h>
 #include <linux/sort.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <asm/div64.h>
 
 #include "lockdep_internals.h"
@@ -141,6 +142,8 @@ static int lc_show(struct seq_file *m, void *v)
 	int i;
 
 	if (v == SEQ_START_TOKEN) {
+		if (nr_chain_hlocks > MAX_LOCKDEP_CHAIN_HLOCKS)
+			seq_printf(m, "(buggered) ");
 		seq_printf(m, "all lock chains:\n");
 		return 0;
 	}
@@ -199,6 +202,10 @@ static void lockdep_stats_debug_show(struct seq_file *m)
 		debug_atomic_read(chain_lookup_hits));
 	seq_printf(m, " cyclic checks:                 %11llu\n",
 		debug_atomic_read(nr_cyclic_checks));
+	seq_printf(m, " redundant checks:              %11llu\n",
+		debug_atomic_read(nr_redundant_checks));
+	seq_printf(m, " redundant links:               %11llu\n",
+		debug_atomic_read(nr_redundant));
 	seq_printf(m, " find-mask forwards checks:     %11llu\n",
 		debug_atomic_read(nr_find_usage_forwards_checks));
 	seq_printf(m, " find-mask backwards checks:    %11llu\n",
@@ -426,10 +433,12 @@ static void seq_lock_time(struct seq_file *m, struct lock_time *lt)
 
 static void seq_stats(struct seq_file *m, struct lock_stat_data *data)
 {
-	char name[39];
-	struct lock_class *class;
+	struct lockdep_subclass_key *ckey;
 	struct lock_class_stats *stats;
+	struct lock_class *class;
+	const char *cname;
 	int i, namelen;
+	char name[39];
 
 	class = data->class;
 	stats = &data->stats;
@@ -440,15 +449,25 @@ static void seq_stats(struct seq_file *m, struct lock_stat_data *data)
 	if (class->subclass)
 		namelen -= 2;
 
-	if (!class->name) {
+	rcu_read_lock_sched();
+	cname = rcu_dereference_sched(class->name);
+	ckey  = rcu_dereference_sched(class->key);
+
+	if (!cname && !ckey) {
+		rcu_read_unlock_sched();
+		return;
+
+	} else if (!cname) {
 		char str[KSYM_NAME_LEN];
 		const char *key_name;
 
-		key_name = __get_key_name(class->key, str);
+		key_name = __get_key_name(ckey, str);
 		snprintf(name, namelen, "%s", key_name);
 	} else {
-		snprintf(name, namelen, "%s", class->name);
+		snprintf(name, namelen, "%s", cname);
 	}
+	rcu_read_unlock_sched();
+
 	namelen = strlen(name);
 	if (class->name_version > 1) {
 		snprintf(name+namelen, 3, "#%d", class->name_version);

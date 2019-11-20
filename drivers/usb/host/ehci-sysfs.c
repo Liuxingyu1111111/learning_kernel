@@ -1,19 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * Copyright (C) 2007 by Alan Stern
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License as published by the
- * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
- * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software Foundation,
- * Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 /* this file is part of ehci-hcd.c */
@@ -29,7 +16,7 @@ static ssize_t show_companion(struct device *dev,
 	int			count = PAGE_SIZE;
 	char			*ptr = buf;
 
-	ehci = hcd_to_ehci(bus_to_hcd(dev_get_drvdata(dev)));
+	ehci = hcd_to_ehci(dev_get_drvdata(dev));
 	nports = HCS_N_PORTS(ehci->hcs_params);
 
 	for (index = 0; index < nports; ++index) {
@@ -54,7 +41,7 @@ static ssize_t store_companion(struct device *dev,
 	struct ehci_hcd		*ehci;
 	int			portnum, new_owner;
 
-	ehci = hcd_to_ehci(bus_to_hcd(dev_get_drvdata(dev)));
+	ehci = hcd_to_ehci(dev_get_drvdata(dev));
 	new_owner = PORT_OWNER;		/* Owned by companion */
 	if (sscanf(buf, "%d", &portnum) != 1)
 		return -EINVAL;
@@ -85,7 +72,7 @@ static ssize_t show_uframe_periodic_max(struct device *dev,
 	struct ehci_hcd		*ehci;
 	int			n;
 
-	ehci = hcd_to_ehci(bus_to_hcd(dev_get_drvdata(dev)));
+	ehci = hcd_to_ehci(dev_get_drvdata(dev));
 	n = scnprintf(buf, PAGE_SIZE, "%d\n", ehci->uframe_periodic_max);
 	return n;
 }
@@ -101,7 +88,7 @@ static ssize_t store_uframe_periodic_max(struct device *dev,
 	unsigned long		flags;
 	ssize_t			ret;
 
-	ehci = hcd_to_ehci(bus_to_hcd(dev_get_drvdata(dev)));
+	ehci = hcd_to_ehci(dev_get_drvdata(dev));
 	if (kstrtouint(buf, 0, &uframe_periodic_max) < 0)
 		return -EINVAL;
 
